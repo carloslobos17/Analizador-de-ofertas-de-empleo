@@ -9,7 +9,7 @@ from collections import Counter
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="Job Analyzer Pro",
+    page_title="Analizador de Ofertas de Empleo",
     page_icon="💼",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -164,10 +164,10 @@ with st.sidebar:
 
 # --- TÍTULO PRINCIPAL ---
 st.markdown("""
-    <div style="text-align: center; padding: 50px 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    <div style="text-align: center; padding: 40px 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 border-radius: 15px; color: white; margin-bottom: 30px; box-shadow: 0 10px 20px rgba(0,0,0,0.1);">
-        <h1 style="margin: 0; font-size: 72px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); color: white;">💼 Job Analyzer Pro</h1>
-        <p style="margin: 20px 0 0 0; font-size: 30px; opacity: 0.9; color: white;">Extracción inteligente y minería de datos</p>
+        <h1 style="margin: 0; font-size: 102px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); color: white;">Analizador de Ofertas de Empleo</h1>
+        <p style="margin: 20px 0 0 0; font-size: 40px; opacity: 0.9; color: white;">Extracción inteligente y minería de datos</p>
     </div>
 """, unsafe_allow_html=True)
 
