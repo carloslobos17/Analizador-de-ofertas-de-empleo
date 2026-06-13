@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from collections import deque, Counter
 
+# Configuración global
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -19,6 +20,7 @@ MAX_PAGINAS_DEFAULT = 50
 
 
 def normalizar_url(url: str) -> str:
+    """Asegura que la URL tenga el esquema http o https."""
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         return "https://" + url
@@ -26,12 +28,20 @@ def normalizar_url(url: str) -> str:
 
 
 def limpiar_url(url: str) -> str:
+    """Elimina fragmentos (#) y barras finales de la URL para evitar duplicados."""
     return url.split("#")[0].rstrip("/") or url
 
 
 class CrawlerEmpleo:
+    """
+    Clase encargada de navegar por un dominio específico y extraer datos de empleo.
+    """
 
     def __init__(self, url_principal: str):
+        """
+        Inicializa el crawler con una URL base.
+        :param url_principal: URL desde donde comenzará la navegación.
+        """
         self.url_principal = normalizar_url(url_principal)
         self.dominio = urlparse(self.url_principal).netloc
         self.visitadas: set[str] = set()
@@ -39,12 +49,15 @@ class CrawlerEmpleo:
         self.datos_recopilados: list[dict] = []
 
     def _es_enlace_interno(self, url: str) -> bool:
+        """Verifica si un enlace pertenece al mismo dominio que la URL principal."""
         return urlparse(url).netloc == self.dominio
 
     def _extraer_enlaces_internos(self, soup: BeautifulSoup, url_actual: str) -> list[str]:
+        """Extrae todos los enlaces <a> de una página que apunten al mismo dominio."""
         enlaces = []
         for enlace in soup.find_all("a", href=True):
             href = enlace.get("href", "").strip()
+            # Ignorar enlaces irrelevantes
             if not href or href.startswith(("mailto:", "javascript:", "tel:", "#")):
                 continue
 
@@ -55,74 +68,96 @@ class CrawlerEmpleo:
         return enlaces
 
     def _extraer_datos_pagina(self, soup: BeautifulSoup, url: str) -> None:
-        
+        """
+        Analiza el contenido de una página para extraer título, salario y categoría.
+        """
+        # Extraer título (priorizando h1 o h2)
         titulo_tag = soup.find(["h1", "h2"])
         titulo = titulo_tag.text.strip() if titulo_tag else "Sin título"
 
+        # Obtener todo el texto visible para buscar salarios y palabras clave
         texto_pagina = soup.get_text(separator=' ', strip=True)
 
+        # Extracción de Salario/Precio (Mejorada)
         precio = None
-        patron_precio = re.findall(r'[$€]\s?(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)', texto_pagina)
-        if patron_precio:
-            try:
-                precio_limpio = patron_precio[0].replace(',', '').replace('.', '')
-                precio = float(precio_limpio)
-            except ValueError:
-                pass
+        patrones_salario = [
+            r'[$€£]\s?(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)', # Símbolo antes
+            r'(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)\s?[$€£]', # Símbolo después
+            r'(?:salario|sueldo|paga)[:\s]*([$€£]?\s?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)', # Palabra clave
+        ]
+        
+        for patron in patrones_salario:
+            match = re.search(patron, texto_pagina, re.IGNORECASE)
+            if match:
+                try:
+                    # Limpieza agresiva del valor numérico
+                    valor_str = match.group(1).replace('$', '').replace('€', '').replace('£', '').strip()
+                    # Normalización de separadores decimales/miles
+                    if ',' in valor_str and '.' in valor_str:
+                        if valor_str.find('.') < valor_str.find(','): # 1.234,56 -> 1234.56
+                            valor_str = valor_str.replace('.', '').replace(',', '.')
+                        else: # 1,234.56 -> 1234.56
+                            valor_str = valor_str.replace(',', '')
+                    elif ',' in valor_str:
+                        valor_str = valor_str.replace(',', '.')
+                    
+                    val = float(valor_str)
+                    if 100 < val < 1000000: # Rango razonable para salarios mensuales/anuales
+                        precio = val
+                        break
+                except ValueError:
+                    continue
 
+        # Categorización Inteligente
         categoria = "General"
         url_lower = url.lower()
+        texto_lower = texto_pagina.lower()
         
-        if any(k in url_lower for k in ["tecnologia", "it", "tech", "software", "developer", "programacion", "data"]):
-            categoria = "Tecnología"
-            
-        elif any(k in url_lower for k in ["ventas", "sales", "comercial", "retail", "negocios"]):
-            categoria = "Ventas"
-            
-        elif any(k in url_lower for k in ["marketing", "publicidad", "seo", "sem", "social-media", "comunicacion"]):
-            categoria = "Marketing"
-            
-        elif any(k in url_lower for k in ["diseno", "design", "ux", "ui", "creativo", "arte"]):
-            categoria = "Diseño y Creatividad"
-            
-        elif any(k in url_lower for k in ["finanzas", "contabilidad", "finance", "accounting", "banca", "auditoria"]):
-            categoria = "Finanzas y Contabilidad"
-            
-        elif any(k in url_lower for k in ["rrhh", "recursos-humanos", "hr", "talent", "recruitment", "personal"]):
-            categoria = "Recursos Humanos"
-            
-        elif any(k in url_lower for k in ["administracion", "admin", "operaciones", "operations", "oficina"]):
-            categoria = "Administración y Operaciones"
-            
-        elif any(k in url_lower for k in ["atencion", "customer", "soporte", "support", "service", "call-center"]):
-            categoria = "Atención al Cliente"
-            
-        elif any(k in url_lower for k in ["salud", "medica", "health", "medical", "clinica", "enfermeria"]):
-            categoria = "Salud y Medicina"
-            
-        elif any(k in url_lower for k in ["educacion", "education", "profesor", "teacher", "formacion", "docente"]):
-            categoria = "Educación y Formación"
-            
-        elif any(k in url_lower for k in ["legal", "derecho", "abogado", "law", "juridico"]):
-            categoria = "Legal"
+        categorias_keywords = {
+            "Tecnología": ["tecnologia", "it", "tech", "software", "developer", "programacion", "data", "sistemas", "fullstack", "backend", "frontend", "ingeniero"],
+            "Ventas": ["ventas", "sales", "comercial", "retail", "negocios", "vendedor", "ejecutivo", "promotor"],
+            "Marketing": ["marketing", "publicidad", "seo", "sem", "social-media", "comunicacion", "digital", "branding", "copywriter"],
+            "Diseño y Creatividad": ["diseno", "design", "ux", "ui", "creativo", "arte", "ilustrador", "grafico", "video"],
+            "Finanzas": ["finanzas", "contabilidad", "finance", "accounting", "banca", "auditoria", "contador", "tesoreria"],
+            "Recursos Humanos": ["rrhh", "recursos-humanos", "hr", "talent", "recruitment", "personal", "reclutamiento", "nominas"],
+            "Administración": ["administracion", "admin", "operaciones", "operations", "oficina", "asistente", "recepcionista"],
+            "Atención al Cliente": ["atencion", "customer", "soporte", "support", "service", "call-center", "ayuda", "recepcion"],
+            "Salud y Medicina": ["salud", "medica", "health", "medical", "clinica", "enfermeria", "doctor", "odontologia", "psicologia"],
+            "Educación": ["educacion", "education", "profesor", "teacher", "formacion", "docente", "taller", "instructor"],
+            "Legal": ["legal", "derecho", "abogado", "law", "juridico", "leyes", "notaria"]
+        }
+
+        for cat, keywords in categorias_keywords.items():
+            if any(k in url_lower for k in keywords) or any(k in texto_lower[:1000] for k in keywords):
+                categoria = cat
+                break
+
+        # Almacenar datos
         self.datos_recopilados.append({
             "URL": url,
             "Titulo": titulo,
             "Precio": precio,
             "Categoria": categoria,
-            "Texto": texto_pagina
+            "Descripcion": texto_pagina[:1000] # Fragmento para análisis de palabras clave
         })
 
     def _agregar_enlaces(self, enlaces: list[str]) -> None:
+        """Añade nuevos enlaces a la cola de pendientes si no han sido visitados."""
         for url in enlaces:
             if url not in self.visitadas and url not in self.pendientes:
                 self.pendientes.append(url)
 
-    def recorrer(self, max_paginas: int = MAX_PAGINAS_DEFAULT) -> pd.DataFrame:
+    def recorrer(self, max_paginas: int = MAX_PAGINAS_DEFAULT, callback=None) -> pd.DataFrame:
+        """
+        Inicia el proceso de crawling hasta alcanzar el límite de páginas.
+        :param max_paginas: Cantidad máxima de páginas a visitar.
+        :param callback: Función opcional para reportar el progreso (útil para la UI).
+        :return: DataFrame con los datos extraídos.
+        """
         paginas_visitadas = 0
 
-        print(f"\nIniciando crawler desde: {self.url_principal}")
-        print(f"Límite de páginas: {max_paginas}\n")
+        msg_inicio = f" Iniciando crawler desde: {self.url_principal}\n🔍 Límite de páginas: {max_paginas}\n"
+        if callback: callback(msg_inicio)
 
         while self.pendientes and paginas_visitadas < max_paginas:
             url = self.pendientes.popleft()
@@ -132,99 +167,95 @@ class CrawlerEmpleo:
 
             self.visitadas.add(url)
             paginas_visitadas += 1
-            print(f"[{paginas_visitadas}/{max_paginas}] Visitando: {url}")
+            log_msg = f" [{paginas_visitadas}/{max_paginas}] Visitando: {url}"
+            if callback: callback(log_msg)
 
             try:
+                # Realizar petición HTTP con timeout
                 respuesta = requests.get(url, headers=HEADERS, timeout=15)
 
                 if respuesta.status_code != 200:
-                    print(f"[ERROR] Código HTTP {respuesta.status_code}: {url}")
+                    err_msg = f" [ERROR] Código HTTP {respuesta.status_code} en {url}"
+                    if callback: callback(err_msg)
                     continue
 
+                # Parsear contenido HTML
                 soup = BeautifulSoup(respuesta.text, "html.parser")
                 
+                # Extraer datos y nuevos enlaces
                 self._extraer_datos_pagina(soup, url)
-                
                 enlaces = self._extraer_enlaces_internos(soup, url)
                 self._agregar_enlaces(enlaces)
                 
+                # Respetar el sitio con un pequeño retraso
                 time.sleep(1)
 
             except requests.exceptions.RequestException as error:
-                print(f"[ERROR] {url}: {error}")
+                err_msg = f"🔌 [ERROR RED] {url}: {error}"
+                if callback: callback(err_msg)
 
-        print(f"\nCrawler finalizado. Páginas visitadas: {len(self.visitadas)}")
+        msg_fin = f"\n Crawler finalizado. Páginas analizadas: {len(self.visitadas)}"
+        if callback: callback(msg_fin)
+        
         return pd.DataFrame(self.datos_recopilados)
 
 
 def mineria_de_datos(df: pd.DataFrame) -> None:
-    print("\n" + "=" * 40)
-    print("RESULTADOS DE MINERÍA DE DATOS")
-    print("=" * 40)
+    """
+    Realiza un análisis de datos sobre el DataFrame y muestra resultados en consola.
+    """
+    print("\n" + "=" * 50)
+    print(" RESULTADOS DE MINERÍA DE DATOS (CONSOLA)")
+    print("=" * 50)
 
     if df.empty:
-        print("El DataFrame está vacío. No hay datos para analizar.")
+        print(" No hay datos para analizar.")
         return
 
+    # Análisis de Salarios
     df_precios = df.dropna(subset=['Precio'])
-
     if not df_precios.empty:
-        precio_promedio = df_precios['Precio'].mean()
-        precio_minimo = df_precios['Precio'].min()
-        precio_maximo = df_precios['Precio'].max()
-        
-        print("\n--- ANÁLISIS DE SALARIOS ---")
-        print(f"Salario promedio : ${precio_promedio:,.2f}")
-        print(f"Salario mínimo   : ${precio_minimo:,.2f}")
-        print(f"Salario máximo   : ${precio_maximo:,.2f}")
+        print(f"\n Análisis de Sueldos:")
+        print(f" • Promedio: ${df_precios['Precio'].mean():,.2f}")
+        print(f" • Rango: ${df_precios['Precio'].min():,.2f} - ${df_precios['Precio'].max():,.2f}")
     else:
-        print("\n[!] No se encontraron precios válidos en el formato esperado.")
+        print("\n No se detectaron salarios válidos.")
 
-    print("\n--- PALABRAS MÁS FRECUENTES (TÍTULOS) ---")
-    
+    # Palabras clave en Títulos
+    print("\n Palabras más frecuentes en Títulos:")
     texto_titulos = " ".join(df['Titulo'].astype(str)).lower()
     palabras = re.findall(r'\b[a-záéíóúñ]{4,}\b', texto_titulos)
-    contador_palabras = Counter(palabras)
-    for palabra, frec in contador_palabras.most_common(5):
-        print(f" • {palabra.capitalize()}: {frec} repeticiones")
+    for palabra, frec in Counter(palabras).most_common(5):
+        print(f" • {palabra.capitalize()}: {frec}")
 
-    print("\n--- CATEGORÍAS PREDOMINANTES ---")
-    frecuencia_categorias = df['Categoria'].value_counts()
-    for categoria, cantidad in frecuencia_categorias.items():
-        porcentaje = (cantidad / len(df)) * 100
-        print(f" • {categoria}: {cantidad} ({porcentaje:.1f}%)")
-
-    print("\n--- TENDENCIAS (SALARIO POR CATEGORÍA) ---")
-    if not df_precios.empty:
-        tendencias = df_precios.groupby('Categoria')['Precio'].mean().sort_values(ascending=False)
-        for categoria, promedio in tendencias.items():
-            print(f" • {categoria}: ${promedio:,.2f} en promedio")
-    else:
-        print(" • No hay suficientes datos de precios para marcar tendencias.")
+    # Distribución por Categoría
+    print("\n Distribución por Categoría:")
+    frec_cat = df['Categoria'].value_counts()
+    for cat, cant in frec_cat.items():
+        print(f" • {cat}: {cant} ({ (cant/len(df))*100:.1f}%)")
 
 
 def main() -> None:
+    """Función de entrada para ejecución por consola."""
     print("=" * 60)
-    print("PROYECTO 3 - Crawler Automático y Minería de Datos")
+    print("PROYECTO 3 - Crawler de Empleo")
     print("=" * 60)
 
-    url = input("\nIngrese la URL principal: ").strip()
+    url = input("\n Ingrese la URL principal: ").strip()
     if not url:
-        print("Debe ingresar una URL válida.")
         return
 
-    max_paginas = input(f"Máximo de páginas (default {MAX_PAGINAS_DEFAULT}): ").strip()
-    limite = int(max_paginas) if max_paginas.isdigit() else MAX_PAGINAS_DEFAULT
+    max_p = input(f" Máximo de páginas (default {MAX_PAGINAS_DEFAULT}): ").strip()
+    limite = int(max_p) if max_p.isdigit() else MAX_PAGINAS_DEFAULT
 
     crawler = CrawlerEmpleo(url)
-    df_datos = crawler.recorrer(max_paginas=limite)
+    df = crawler.recorrer(max_paginas=limite, callback=print)
 
-    #Guarda el DataFrame en un archivo CSV físico
-    archivo_csv = "datos_extraidos.csv"
-    df_datos.to_csv(archivo_csv, index=False, encoding='utf-8')
-    print(f"\n Datos guardados exitosamente en '{archivo_csv}'")
+    # Guardar persistencia
+    df.to_csv("datos_extraidos.csv", index=False, encoding='utf-8')
+    print(f"\n Datos guardados en 'datos_extraidos.csv'")
 
-    mineria_de_datos(df_datos)
+    mineria_de_datos(df)
 
 
 if __name__ == "__main__":
